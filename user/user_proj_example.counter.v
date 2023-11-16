@@ -69,36 +69,34 @@ module user_proj_example #(
     // IRQ
     output [2:0] irq
 );
-
-
     wire clk;
-    assign clk =wb_clk_i;
     wire rst;
 
     wire [`MPRJ_IO_PADS-1:0] io_in;
     wire [`MPRJ_IO_PADS-1:0] io_out;
     wire [`MPRJ_IO_PADS-1:0] io_oeb;
 
-    wire [31:0]Di0;
-    wire EN0;
-    wire [3:0]WE0;
-    wire [31:0]A0;
-    wire [31:0]Do0;
+    wire [31:0] rdata; 
+    wire [31:0] wdata;
+    wire [BITS-1:0] count;
 
-    reg [31:0]bram_addr=0;
-    reg [3:0]bram_we;
-    reg bram_en;
-    assign A0 =bram_addr;
-    assign WE0=bram_we;
-    assign EN0=bram_en;
-    assign Di0=wbs_dat_i;
+    wire valid;
+    wire [3:0] wstrb;
+    wire [31:0] la_write;
+    wire decoded;
+    wire [31:0]exmem_addr;
+    reg ready;
+    reg [BITS-17:0] delayed_count;
 
-    assign wbs_ack_o=Wbs_ack_o;
-    assign wbs_dat_o=Do0;
+    // WB MI A
+    assign valid = wbs_cyc_i && wbs_stb_i && decoded; 
+    assign wstrb = wbs_sel_i & {4{wbs_we_i}};
+    assign wbs_dat_o = rdata;
+    assign wdata = wbs_dat_i;
+    assign wbs_ack_o = ready;
+    assign exmem_addr = { {8{1'b0}}, wbs_adr_i[23:0]};
 
-    reg Wbs_ack_o=0;
-
-   // IO
+    // IO
     assign io_out = count;
     assign io_oeb = {(`MPRJ_IO_PADS-1){rst}};
 
@@ -107,67 +105,39 @@ module user_proj_example #(
 
     // LA
     assign la_data_out = {{(127-BITS){1'b0}}, count};
+    // Assuming LA probes [63:32] are for controlling the count register  
+    assign la_write = ~la_oenb[63:32] & ~{BITS{valid}};
     // Assuming LA probes [65:64] are for controlling the count clk & reset  
     assign clk = (~la_oenb[64]) ? la_data_in[64]: wb_clk_i;
     assign rst = (~la_oenb[65]) ? la_data_in[65]: wb_rst_i;
 
-reg [4:0]count=0;
+    assign decoded = wbs_adr_i[31:20] == 12'h380 ? 1'b1 : 1'b0;
 
-//wishbone controller
-always @(posedge clk ) begin
-
-    bram_addr <= wbs_adr_i;
-    if(wbs_adr_i[31:24]==8'b00111000)begin
-    if(wbs_cyc_i && wbs_stb_i) begin
-        if(count<11)begin
-            //$display("count:%d ack%d datao:%x din:%x addr:%x stb:%d sel:%d we:%d",count,Wbs_ack_o,wbs_dat_o,wbs_dat_i,wbs_adr_i,wbs_stb_i,wbs_sel_i,wbs_we_i);
-            count<=count+1;
-            if(wbs_sel_i==15) begin
-                bram_en<=1;               
-                    if(wbs_we_i) begin
-                    bram_we <= 4'b1111;
-                    end
-                    else begin
-                    bram_we <= 4'b0000;                                
-                    end
+    always @(posedge clk) begin
+        if (rst) begin
+            ready <= 1'b0;
+            delayed_count <= 16'b0;
+        end else begin
+            ready <= 1'b0;
+            if ( valid && !ready ) begin
+                if ( delayed_count == DELAYS ) begin
+                    delayed_count <= 16'b0;
+                    ready <= 1'b1;
+                end else begin
+                    delayed_count <= delayed_count + 1;
+                end
             end
-            else bram_en<=0;
-
-        Wbs_ack_o <= 1'b0;
-        end
-        else begin
-            count<=0;
-            Wbs_ack_o <= 1'b1;  
         end
     end
-    else bram_we <= 4'b0000; 
-    end
-end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
     bram user_bram (
         .CLK(clk),
-        .WE0(WE0),
-        .EN0(EN0),
-        .Di0(Di0),
-        .Do0(Do0),
-        .A0(A0)
+        .WE0(wstrb),
+        .EN0(valid),
+        .Di0(wbs_dat_i),
+        .Do0(rdata),
+        .A0(exmem_addr)
     );
 
 endmodule
